@@ -28,6 +28,41 @@
 const { useState, useMemo } = React;
 const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Area, ComposedChart } = Recharts;
 
+const STOCKS = {
+  SOFI: { name:"SoFi", ticker:"SOFI", price:18.90, target:60, baseline:27.24,
+    std:0.05, jSigma:0.12, jMu:-0.06, lambda:0.5,
+    callStrike:1.12, putStrike:0.92, premRate:0.04, downMult:6,
+    stagThresh:0.03, stagTight:0.05, stagPremCut:0.65 },
+  AAPL: { name:"Apple", ticker:"AAPL", price:227, target:300, baseline:227,
+    std:0.035, jSigma:0.08, jMu:-0.04, lambda:0.3,
+    callStrike:1.08, putStrike:0.94, premRate:0.025, downMult:4,
+    stagThresh:0.02, stagTight:0.03, stagPremCut:0.7 },
+  TSLA: { name:"Tesla", ticker:"TSLA", price:350, target:600, baseline:350,
+    std:0.07, jSigma:0.15, jMu:-0.08, lambda:0.6,
+    callStrike:1.15, putStrike:0.88, premRate:0.055, downMult:5,
+    stagThresh:0.04, stagTight:0.06, stagPremCut:0.6 },
+  NVDA: { name:"NVIDIA", ticker:"NVDA", price:120, target:200, baseline:120,
+    std:0.06, jSigma:0.12, jMu:-0.05, lambda:0.4,
+    callStrike:1.10, putStrike:0.92, premRate:0.04, downMult:5,
+    stagThresh:0.03, stagTight:0.04, stagPremCut:0.65 },
+  GOOGL: { name:"Google", ticker:"GOOGL", price:170, target:250, baseline:170,
+    std:0.03, jSigma:0.06, jMu:-0.03, lambda:0.2,
+    callStrike:1.07, putStrike:0.96, premRate:0.022, downMult:4,
+    stagThresh:0.02, stagTight:0.03, stagPremCut:0.75 },
+  AMZN: { name:"Amazon", ticker:"AMZN", price:200, target:280, baseline:200,
+    std:0.035, jSigma:0.08, jMu:-0.04, lambda:0.3,
+    callStrike:1.08, putStrike:0.94, premRate:0.025, downMult:4,
+    stagThresh:0.02, stagTight:0.03, stagPremCut:0.7 },
+  MSFT: { name:"Microsoft", ticker:"MSFT", price:415, target:550, baseline:415,
+    std:0.03, jSigma:0.06, jMu:-0.03, lambda:0.2,
+    callStrike:1.07, putStrike:0.95, premRate:0.02, downMult:3,
+    stagThresh:0.02, stagTight:0.03, stagPremCut:0.75 },
+  META: { name:"Meta", ticker:"META", price:600, target:850, baseline:600,
+    std:0.045, jSigma:0.10, jMu:-0.05, lambda:0.35,
+    callStrike:1.09, putStrike:0.93, premRate:0.03, downMult:4,
+    stagThresh:0.025, stagTight:0.04, stagPremCut:0.7 },
+};
+
 const fmt = (v) => {
   if (v == null || isNaN(v)) return "$0";
   const abs = Math.abs(v), s = v < 0 ? "-" : "";
@@ -39,58 +74,49 @@ const pct = (v) => (v*100).toFixed(1)+"%";
 const cagr = (f, i, y) => Math.pow(f/i, 1/y) - 1;
 
 function runSim(p) {
-  const months = p.years * 12, SPLIT = 0.5;
-  const sStd = 0.05*(1+p.sofiVolAdj), sJSigma = 0.12*(1+p.sofiVolAdj);
-  const sLambda=0.5, gLambda=0.2, sJMu=-0.06, gJMu=-0.03, gJSigma=0.06;
-  let sP=18.90, gP=298, sBasis=sP;
-  let sofiSh=Math.floor((p.capital*p.sofiRatio*SPLIT)/sP);
-  let googlSh=Math.floor((p.capital*p.googlRatio*SPLIT)/gP);
-  let sofiC=p.capital*p.sofiRatio*SPLIT, googlC=p.capital*p.googlRatio*SPLIT;
-  let tfSofiSh=sofiSh, tfGooglSh=googlSh, tfSofiC=sofiC, tfGooglC=googlC;
-  let reCurrV=p.reStartVal, divSofiSh=p.tradingStartVal/sP;
-  let taxBal=0, sStag=0, sGr=0, gGr=0, sUg=0, gUg=0;
+  const stk = p.stock, months = p.years * 12, SPLIT = 0.5;
+  const sStd = stk.std*(1+p.volAdj), sJSigma = stk.jSigma*(1+p.volAdj);
+  let sP=stk.price, sBasis=sP;
+  let sh=Math.floor((p.capital*SPLIT)/sP);
+  let cash=p.capital*SPLIT;
+  let tfSh=sh, tfCash=cash;
+  let reCurrV=p.reStartVal, divSh=p.tradingStartVal/sP;
+  let taxBal=0, stag=0, gr=0, ug=0;
   const randn=()=>{let u=0,v=0;while(!u)u=Math.random();v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};
   const poisson=(lam)=>{let L=Math.exp(-lam),k=0,pp=1;do{k++;pp*=Math.random();}while(pp>L);return k-1;};
   const history=[];
   for(let m=0;m<=months;m++){
     if(m>0&&m%12===1) taxBal=0;
-    if(m>0){ const rent=reCurrV*(p.reRental/12); reCurrV*=(1+p.reReturn/12); divSofiSh+=rent/sP; }
-    const interest=(Math.max(0,sofiSh*sP-sofiC)+Math.max(0,googlSh*gP-googlC))*(p.marginRate/12);
-    sofiC-=interest/2; googlC-=interest/2;
-    const sEffC=sofiC*(1+p.marginUsage), gEffC=googlC*(1+p.marginUsage), tfSEffC=tfSofiC*(1+p.marginUsage);
-    const sTight=sStag>=p.stagnantThresh?0.05:0;
-    const sCallS=Math.max(sP*(1.12-sTight),sBasis*1.05), sPutS=sP*(0.92+sTight);
-    const gCallS=gP*1.07, gPutS=gP*0.96;
-    const sPQ=Math.floor((sEffC*(1-p.reservePct))/(sPutS*100));
-    const sCQ=Math.floor((sofiSh*p.coverRatio)/100);
-    const gPQ=Math.floor((gEffC*(1-p.reservePct))/(gPutS*100));
-    const gCQ=Math.floor((googlSh*p.coverRatio)/100);
-    const tfSPQ=Math.floor((tfSEffC*(1-p.reservePct))/(sPutS*100));
-    const totalBal=sofiSh*sP+sofiC+googlSh*gP+googlC;
-    const tfBal=tfSofiSh*sP+tfSofiC+tfGooglSh*gP+tfGooglC;
-    const bhVal=((p.capital*p.sofiRatio)/27.24*sP)+((p.capital*p.googlRatio)/312*gP);
-    const divStockVal=divSofiSh*sP;
+    if(m>0){ const rent=reCurrV*(p.reRental/12); reCurrV*=(1+p.reReturn/12); divSh+=rent/sP; }
+    const interest=Math.max(0,sh*sP-cash)*(p.marginRate/12);
+    cash-=interest;
+    const effC=cash*(1+p.marginUsage), tfEffC=tfCash*(1+p.marginUsage);
+    const sTight=stag>=p.stagnantThresh?stk.stagTight:0;
+    const callS=Math.max(sP*(stk.callStrike-sTight),sBasis*1.05), putS=sP*(stk.putStrike+sTight);
+    const pQ=Math.floor((effC*(1-p.reservePct))/(putS*100));
+    const cQ=Math.floor((sh*p.coverRatio)/100);
+    const tfPQ=Math.floor((tfEffC*(1-p.reservePct))/(putS*100));
+    const totalBal=sh*sP+cash;
+    const tfBal=tfSh*sP+tfCash;
+    const bhVal=(p.capital)/stk.baseline*sP;
+    const divStockVal=divSh*sP;
     let reDiv, bhNet;
     if(m===months){ const sale=reCurrV*0.95-5000; const netRe=sale-Math.max(0,sale-p.reStartVal)*p.taxRate; reDiv=netRe+divStockVal; bhNet=bhVal-Math.max(0,bhVal-p.capital)*p.taxRate; }
     else{ reDiv=reCurrV+divStockVal; bhNet=bhVal; }
-    history.push({ month:m, sofiPx:+sP.toFixed(2), googlPx:+gP.toFixed(2), wheel:totalBal, taxFree:tfBal, reDiv, buyHold:bhNet, sofiSh, googlSh, cash:sofiC+googlC, taxBal, premSofi:sGr, premGoogl:gGr, sCQ, sPQ, gCQ, gPQ, assignment:"" });
+    history.push({ month:m, stockPx:+sP.toFixed(2), wheel:totalBal, taxFree:tfBal, reDiv, buyHold:bhNet, sh, cash, taxBal, prem:gr, cQ, pQ, assignment:"" });
     if(m<months){
-      const sRet=randn()*sStd+Math.log(p.sofiTarget/27.24)/months+(poisson(sLambda/12)>0?randn()*sJSigma+sJMu:0);
-      const gRet=randn()*0.03+Math.log(p.googlTarget/312)/months+(poisson(gLambda/12)>0?randn()*gJSigma+gJMu:0);
-      sStag=Math.abs(sRet)<0.03?sStag+1:0;
-      const sVolMult=(1+Math.abs(Math.min(0,sRet))*6)*(sStag>=p.stagnantThresh?0.65:1);
-      const gVolMult=(1+Math.abs(Math.min(0,gRet))*4)*(Math.abs(gRet)<0.02?0.75:1);
-      sUg=sP*0.04*sVolMult*p.premOffset; gUg=gP*0.022*gVolMult*p.premOffset;
-      sGr=Math.round((sCQ+sPQ)*100*sUg); gGr=Math.round((gCQ+gPQ)*100*gUg);
-      sP*=(1+sRet); gP*=(1+gRet);
-      taxBal+=(sGr+gGr)*p.taxRate;
-      sofiC+=sGr*(1-p.taxRate); googlC+=gGr*(1-p.taxRate);
-      tfSofiC+=(tfSofiSh/100*p.coverRatio+tfSPQ)*100*sUg;
+      const ret=randn()*sStd+Math.log(p.target/stk.baseline)/months+(poisson(stk.lambda/12)>0?randn()*sJSigma+stk.jMu:0);
+      stag=Math.abs(ret)<stk.stagThresh?stag+1:0;
+      const volMult=(1+Math.abs(Math.min(0,ret))*stk.downMult)*(stag>=p.stagnantThresh?stk.stagPremCut:1);
+      ug=sP*stk.premRate*volMult*p.premOffset;
+      gr=Math.round((cQ+pQ)*100*ug);
+      sP*=(1+ret);
+      taxBal+=gr*p.taxRate;
+      cash+=gr*(1-p.taxRate);
+      tfCash+=(tfSh/100*p.coverRatio+tfPQ)*100*ug;
       let evs=[];
-      if(sP>sCallS*1.01){sofiC+=sCQ*100*sCallS;sofiSh-=sCQ*100;evs.push("SoFi Call");}
-      else if(sP<sPutS*0.99){sofiSh+=sPQ*100;sofiC-=sPQ*100*sPutS;sBasis=sPutS;evs.push("SoFi Put");}
-      if(gP>gCallS*1.01){googlC+=gCQ*100*gCallS;googlSh-=gCQ*100;evs.push("GOOGL Call");}
-      else if(gP<gPutS*0.99){googlSh+=gPQ*100;googlC-=gPQ*100*gPutS;evs.push("GOOGL Put");}
+      if(sP>callS*1.01){cash+=cQ*100*callS;sh-=cQ*100;evs.push(stk.ticker+" Call");}
+      else if(sP<putS*0.99){sh+=pQ*100;cash-=pQ*100*putS;sBasis=putS;evs.push(stk.ticker+" Put");}
       history[history.length-1].assignment=evs.join(", ")||"-";
     }
   }
@@ -156,20 +182,23 @@ const CTip = ({active,payload,label}) => {
 
 function App() {
   const [tab,setTab] = useState("growth");
+  const [stockKey,setStockKey] = useState("SOFI");
+  const stk = STOCKS[stockKey];
   const [params,setParams] = useState({
     years:5, capital:1000000, marginUsage:0, marginRate:0.08, taxRate:0.285,
-    sofiRatio:1, googlRatio:0, sofiTarget:60, googlTarget:500,
-    coverRatio:1, reservePct:0, premOffset:0.7, sofiVolAdj:0.3, stagnantThresh:3,
+    target:60, coverRatio:1, reservePct:0, premOffset:0.7, volAdj:0.3, stagnantThresh:3,
     reStartVal:700000, tradingStartVal:300000, reReturn:0.04, reRental:0.04 });
   const [mcRuns,setMcRuns]=useState(25);
   const [simKey,setSimKey]=useState(0);
   const set=k=>v=>setParams(p=>({...p,[k]:v}));
+  const simParams = useMemo(()=>({...params, stock:stk}),[params,stk]);
+  const changeStock=(key)=>{setStockKey(key);setParams(p=>({...p,target:STOCKS[key].target}));};
 
-  const single = useMemo(()=>runSim(params),[params,simKey]);
-  const mc = useMemo(()=>runMC(params,mcRuns),[params,mcRuns,simKey]);
+  const single = useMemo(()=>runSim(simParams),[simParams,simKey]);
+  const mc = useMemo(()=>runMC(simParams,mcRuns),[simParams,mcRuns,simKey]);
   const last = single[single.length-1];
-  const prems = single.filter(d=>d.month>0).map(d=>({month:d.month,sofi:d.premSofi,googl:d.premGoogl,total:d.premSofi+d.premGoogl}));
-  const totalPrem = prems.reduce((s,d)=>s+d.total,0);
+  const prems = single.filter(d=>d.month>0).map(d=>({month:d.month,prem:d.prem}));
+  const totalPrem = prems.reduce((s,d)=>s+d.prem,0);
   const assigns = single.filter(d=>d.assignment&&d.assignment!=="-");
 
   return (
@@ -178,7 +207,7 @@ function App() {
         <h1 style={{fontSize:26,fontWeight:800,background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Wheel Strategy Simulator</h1>
         <span style={{fontSize:11,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>v2.0</span>
       </div>
-      <p style={{color:C.dim,fontSize:13,marginBottom:20}}>SoFi CC + CSP · Monte Carlo · 4-Strategy Comparison</p>
+      <p style={{color:C.dim,fontSize:13,marginBottom:20}}>{stk.ticker} CC + CSP · Monte Carlo · 4-Strategy Comparison</p>
 
       <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
         {/* Params Panel */}
@@ -186,12 +215,21 @@ function App() {
           <div style={{fontSize:12,fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
             <span style={{width:6,height:6,borderRadius:"50%",background:C.accent,display:"inline-block"}} /> Parameters
           </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Stock</div>
+            <select value={stockKey} onChange={e=>changeStock(e.target.value)} style={{
+              width:"100%",padding:"7px 10px",background:C.bg,color:C.accent,border:"1px solid "+C.border,
+              borderRadius:6,fontSize:12,fontFamily:"'JetBrains Mono',monospace",fontWeight:600,cursor:"pointer",outline:"none"
+            }}>
+              {Object.entries(STOCKS).map(([k,v])=><option key={k} value={k} style={{background:C.bg}}>{v.ticker} — ${v.price}</option>)}
+            </select>
+          </div>
           <Slider label="Years" value={params.years} onChange={set("years")} min={1} max={10} step={1} />
           <Slider label="Capital" value={params.capital} onChange={set("capital")} min={100000} max={5000000} step={100000} format={fmt} />
-          <Slider label="SoFi Target" value={params.sofiTarget} onChange={set("sofiTarget")} min={20} max={120} step={5} format={v=>"$"+v} />
+          <Slider label={stk.ticker+" Target"} value={params.target} onChange={set("target")} min={Math.round(stk.price*0.8)} max={Math.round(stk.price*5)} step={stk.price>100?10:5} format={v=>"$"+v} />
           <Slider label="Tax Rate" value={params.taxRate} onChange={set("taxRate")} min={0} max={0.5} step={0.01} format={pct} />
           <Slider label="Prem Offset" value={params.premOffset} onChange={set("premOffset")} min={0.3} max={1} step={0.05} format={v=>v.toFixed(2)} />
-          <Slider label="Vol Adjust" value={params.sofiVolAdj} onChange={set("sofiVolAdj")} min={0} max={1} step={0.05} format={v=>"+"+pct(v)} />
+          <Slider label="Vol Adjust" value={params.volAdj} onChange={set("volAdj")} min={0} max={1} step={0.05} format={v=>"+"+pct(v)} />
           <Slider label="Cover Ratio" value={params.coverRatio} onChange={set("coverRatio")} min={0.25} max={1} step={0.25} format={pct} />
           <Slider label="Reserve %" value={params.reservePct} onChange={set("reservePct")} min={0} max={0.5} step={0.05} format={pct} />
           <Slider label="RE Start" value={params.reStartVal} onChange={set("reStartVal")} min={0} max={2000000} step={50000} format={fmt} />
@@ -241,18 +279,18 @@ function App() {
 
             {tab==="price" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>SoFi Stock Price Path</div>
-                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Assignments: {assigns.length} events · Target: ${params.sofiTarget}</div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>{stk.ticker} Stock Price Path</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Assignments: {assigns.length} events · Target: ${params.target}</div>
                 <ResponsiveContainer width="100%" height={360}>
                   <ComposedChart data={single}>
                     <defs><linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.green} stopOpacity={0.1}/><stop offset="100%" stopColor={C.green} stopOpacity={0}/></linearGradient></defs>
                     <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>"$"+v} />
                     <Tooltip content={<CTip/>} />
-                    <Area type="monotone" dataKey="sofiPx" fill="url(#gP)" stroke="none" />
-                    <Line type="monotone" dataKey="sofiPx" stroke={C.green} strokeWidth={2} dot={false} name="SoFi Price" />
-                    <ReferenceLine y={params.sofiTarget} stroke={C.accent} strokeDasharray="6 3" />
-                    <ReferenceLine y={18.90} stroke={C.muted} strokeDasharray="3 3" />
+                    <Area type="monotone" dataKey="stockPx" fill="url(#gP)" stroke="none" />
+                    <Line type="monotone" dataKey="stockPx" stroke={C.green} strokeWidth={2} dot={false} name={stk.ticker+" Price"} />
+                    <ReferenceLine y={params.target} stroke={C.accent} strokeDasharray="6 3" />
+                    <ReferenceLine y={stk.price} stroke={C.muted} strokeDasharray="3 3" />
                     {assigns.map((a,i)=><ReferenceLine key={i} x={a.month} stroke={a.assignment.includes("Put")?C.red:C.bh} strokeDasharray="2 2" strokeOpacity={0.4} />)}
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -272,8 +310,7 @@ function App() {
                     <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
                     <Tooltip content={<CTip/>} />
-                    <Bar dataKey="sofi" stackId="a" fill={C.wheel} name="SoFi" />
-                    <Bar dataKey="googl" stackId="a" fill={C.tf} radius={[2,2,0,0]} name="GOOGL" />
+                    <Bar dataKey="prem" fill={C.wheel} radius={[2,2,0,0]} name={stk.ticker} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -327,7 +364,7 @@ function App() {
                   <table style={{borderCollapse:"collapse",fontSize:10,fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap",width:"100%"}}>
                     <thead style={{position:"sticky",top:0,zIndex:1}}>
                       <tr style={{background:C.cardH}}>
-                        {["Mo","SoFi $","Shares","CC","CSP","Cash","Wheel","TaxFree","RE+Div","B&H","Event"].map(h=>(
+                        {["Mo",stk.ticker+" $","Shares","CC","CSP","Cash","Wheel","TaxFree","RE+Div","B&H","Event"].map(h=>(
                           <th key={h} style={{padding:"7px 8px",textAlign:"right",color:C.muted,fontWeight:600,fontSize:9,textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid "+C.borderL}}>{h}</th>
                         ))}
                       </tr>
@@ -336,10 +373,10 @@ function App() {
                       {single.map((r,i)=>(
                         <tr key={i} style={{borderBottom:"1px solid "+C.border,background:i%2?"transparent":C.bg+"60"}}>
                           <td style={{padding:"5px 8px",textAlign:"right",color:C.dim}}>{r.month}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",color:C.green}}>${r.sofiPx.toFixed(2)}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",color:C.text}}>{r.sofiSh.toLocaleString()}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",color:C.accent}}>{r.sCQ}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",color:C.re}}>{r.sPQ}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.green}}>${r.stockPx.toFixed(2)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.text}}>{r.sh.toLocaleString()}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.accent}}>{r.cQ}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.re}}>{r.pQ}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",color:C.dim}}>{fmt(r.cash)}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",color:C.wheel,fontWeight:600}}>{fmt(r.wheel)}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",color:C.tf}}>{fmt(r.taxFree)}</td>
@@ -359,6 +396,7 @@ function App() {
 
       <div style={{textAlign:"center",marginTop:24,fontSize:10,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>
         Wheel Strategy Simulator · For educational purposes only · Not financial advice
+        <div style={{marginTop:4}}>Code by Kyoo · Built by mang</div>
       </div>
     </div>
   );
