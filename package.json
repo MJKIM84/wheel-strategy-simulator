@@ -1,0 +1,16 @@
+{
+  "name": "wheel-strategy-simulator",
+  "version": "2.0.0",
+  "description": "SoFi Wheel Strategy (CC+CSP) Monte Carlo Simulator",
+  "scripts": {
+    "start": "npx serve . -p 3000 -s",
+    "deploy": "npx gh-pages -d ."
+  },
+  "devDependencies": {
+    "gh-pages": "^6.1.1",
+    "serve": "^14.2.0"
+  },
+  "homepage": "https://joshuakim.github.io/wheel-simulator",
+  "keywords": ["options", "wheel-strategy", "monte-carlo", "sofi", "simulator"],
+  "license": "MIT"
+}

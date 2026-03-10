@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wheel Strategy Simulator</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0e17; color:#e2e8f0; font-family:'Satoshi','Inter',system-ui,sans-serif; }
+  input[type=range] { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:#1e293b; outline:none; cursor:pointer; width:100%; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:#22d3ee; cursor:pointer; }
+  input[type=range]::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#22d3ee; border:none; cursor:pointer; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:#111827; }
+  ::-webkit-scrollbar-thumb { background:#334155; border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background:#475569; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Area, ComposedChart } = Recharts;
+
+const fmt = (v) => {
+  if (v == null || isNaN(v)) return "$0";
+  const abs = Math.abs(v), s = v < 0 ? "-" : "";
+  if (abs >= 1e6) return s+"$"+(abs/1e6).toFixed(2)+"M";
+  if (abs >= 1e3) return s+"$"+(abs/1e3).toFixed(1)+"K";
+  return s+"$"+abs.toFixed(0);
+};
+const pct = (v) => (v*100).toFixed(1)+"%";
+const cagr = (f, i, y) => Math.pow(f/i, 1/y) - 1;
+
+function runSim(p) {
+  const months = p.years * 12, SPLIT = 0.5;
+  const sStd = 0.05*(1+p.sofiVolAdj), sJSigma = 0.12*(1+p.sofiVolAdj);
+  const sLambda=0.5, gLambda=0.2, sJMu=-0.06, gJMu=-0.03, gJSigma=0.06;
+  let sP=18.90, gP=298, sBasis=sP;
+  let sofiSh=Math.floor((p.capital*p.sofiRatio*SPLIT)/sP);
+  let googlSh=Math.floor((p.capital*p.googlRatio*SPLIT)/gP);
+  let sofiC=p.capital*p.sofiRatio*SPLIT, googlC=p.capital*p.googlRatio*SPLIT;
+  let tfSofiSh=sofiSh, tfGooglSh=googlSh, tfSofiC=sofiC, tfGooglC=googlC;
+  let reCurrV=p.reStartVal, divSofiSh=p.tradingStartVal/sP;
+  let taxBal=0, sStag=0, sGr=0, gGr=0, sUg=0, gUg=0;
+  const randn=()=>{let u=0,v=0;while(!u)u=Math.random();v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};
+  const poisson=(lam)=>{let L=Math.exp(-lam),k=0,pp=1;do{k++;pp*=Math.random();}while(pp>L);return k-1;};
+  const history=[];
+  for(let m=0;m<=months;m++){
+    if(m>0&&m%12===1) taxBal=0;
+    if(m>0){ const rent=reCurrV*(p.reRental/12); reCurrV*=(1+p.reReturn/12); divSofiSh+=rent/sP; }
+    const interest=(Math.max(0,sofiSh*sP-sofiC)+Math.max(0,googlSh*gP-googlC))*(p.marginRate/12);
+    sofiC-=interest/2; googlC-=interest/2;
+    const sEffC=sofiC*(1+p.marginUsage), gEffC=googlC*(1+p.marginUsage), tfSEffC=tfSofiC*(1+p.marginUsage);
+    const sTight=sStag>=p.stagnantThresh?0.05:0;
+    const sCallS=Math.max(sP*(1.12-sTight),sBasis*1.05), sPutS=sP*(0.92+sTight);
+    const gCallS=gP*1.07, gPutS=gP*0.96;
+    const sPQ=Math.floor((sEffC*(1-p.reservePct))/(sPutS*100));
+    const sCQ=Math.floor((sofiSh*p.coverRatio)/100);
+    const gPQ=Math.floor((gEffC*(1-p.reservePct))/(gPutS*100));
+    const gCQ=Math.floor((googlSh*p.coverRatio)/100);
+    const tfSPQ=Math.floor((tfSEffC*(1-p.reservePct))/(sPutS*100));
+    const totalBal=sofiSh*sP+sofiC+googlSh*gP+googlC;
+    const tfBal=tfSofiSh*sP+tfSofiC+tfGooglSh*gP+tfGooglC;
+    const bhVal=((p.capital*p.sofiRatio)/27.24*sP)+((p.capital*p.googlRatio)/312*gP);
+    const divStockVal=divSofiSh*sP;
+    let reDiv, bhNet;
+    if(m===months){ const sale=reCurrV*0.95-5000; const netRe=sale-Math.max(0,sale-p.reStartVal)*p.taxRate; reDiv=netRe+divStockVal; bhNet=bhVal-Math.max(0,bhVal-p.capital)*p.taxRate; }
+    else{ reDiv=reCurrV+divStockVal; bhNet=bhVal; }
+    history.push({ month:m, sofiPx:+sP.toFixed(2), googlPx:+gP.toFixed(2), wheel:totalBal, taxFree:tfBal, reDiv, buyHold:bhNet, sofiSh, googlSh, cash:sofiC+googlC, taxBal, premSofi:sGr, premGoogl:gGr, sCQ, sPQ, gCQ, gPQ, assignment:"" });
+    if(m<months){
+      const sRet=randn()*sStd+Math.log(p.sofiTarget/27.24)/months+(poisson(sLambda/12)>0?randn()*sJSigma+sJMu:0);
+      const gRet=randn()*0.03+Math.log(p.googlTarget/312)/months+(poisson(gLambda/12)>0?randn()*gJSigma+gJMu:0);
+      sStag=Math.abs(sRet)<0.03?sStag+1:0;
+      const sVolMult=(1+Math.abs(Math.min(0,sRet))*6)*(sStag>=p.stagnantThresh?0.65:1);
+      const gVolMult=(1+Math.abs(Math.min(0,gRet))*4)*(Math.abs(gRet)<0.02?0.75:1);
+      sUg=sP*0.04*sVolMult*p.premOffset; gUg=gP*0.022*gVolMult*p.premOffset;
+      sGr=Math.round((sCQ+sPQ)*100*sUg); gGr=Math.round((gCQ+gPQ)*100*gUg);
+      sP*=(1+sRet); gP*=(1+gRet);
+      taxBal+=(sGr+gGr)*p.taxRate;
+      sofiC+=sGr*(1-p.taxRate); googlC+=gGr*(1-p.taxRate);
+      tfSofiC+=(tfSofiSh/100*p.coverRatio+tfSPQ)*100*sUg;
+      let evs=[];
+      if(sP>sCallS*1.01){sofiC+=sCQ*100*sCallS;sofiSh-=sCQ*100;evs.push("SoFi Call");}
+      else if(sP<sPutS*0.99){sofiSh+=sPQ*100;sofiC-=sPQ*100*sPutS;sBasis=sPutS;evs.push("SoFi Put");}
+      if(gP>gCallS*1.01){googlC+=gCQ*100*gCallS;googlSh-=gCQ*100;evs.push("GOOGL Call");}
+      else if(gP<gPutS*0.99){googlSh+=gPQ*100;googlC-=gPQ*100*gPutS;evs.push("GOOGL Put");}
+      history[history.length-1].assignment=evs.join(", ")||"-";
+    }
+  }
+  return history;
+}
+
+function runMC(p, runs=25){
+  const results=[];
+  for(let i=0;i<runs;i++){
+    const h=runSim(p); const last=h[h.length-1];
+    results.push({ run:i+1, wheel:last.wheel, taxFree:last.taxFree, reDiv:last.reDiv, buyHold:last.buyHold,
+      wheelCAGR:cagr(last.wheel,p.capital,p.years), tfCAGR:cagr(last.taxFree,p.capital,p.years),
+      reCAGR:cagr(last.reDiv,p.capital,p.years), bhCAGR:cagr(last.buyHold,p.capital,p.years) });
+  }
+  const avg=(arr,k)=>arr.reduce((s,x)=>s+x[k],0)/arr.length;
+  return { results, avg:{ wheel:avg(results,'wheel'), taxFree:avg(results,'taxFree'), reDiv:avg(results,'reDiv'), buyHold:avg(results,'buyHold'),
+    wheelCAGR:avg(results,'wheelCAGR'), tfCAGR:avg(results,'tfCAGR'), reCAGR:avg(results,'reCAGR'), bhCAGR:avg(results,'bhCAGR') }};
+}
+
+const C = { bg:"#0a0e17", card:"#111827", cardH:"#1a2235", border:"#1e293b", borderL:"#334155",
+  text:"#e2e8f0", dim:"#94a3b8", muted:"#64748b",
+  wheel:"#22d3ee", tf:"#a78bfa", re:"#f472b6", bh:"#fbbf24", green:"#34d399", red:"#f87171", accent:"#22d3ee" };
+
+const MetricCard = ({label,value,sub,color}) => (
+  <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:12,padding:"14px 18px",flex:1,minWidth:150}}>
+    <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:5,fontFamily:"'JetBrains Mono',monospace"}}>{label}</div>
+    <div style={{fontSize:22,fontWeight:700,color:color||C.text,fontFamily:"'JetBrains Mono',monospace"}}>{value}</div>
+    {sub && <div style={{fontSize:11,color:C.dim,marginTop:3}}>{sub}</div>}
+  </div>
+);
+
+const Slider = ({label,value,onChange,min,max,step,format}) => (
+  <div style={{marginBottom:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+      <span style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1}}>{label}</span>
+      <span style={{fontSize:11,color:C.accent,fontFamily:"'JetBrains Mono',monospace",fontWeight:600}}>{format?format(value):value}</span>
+    </div>
+    <input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(+e.target.value)} />
+  </div>
+);
+
+const Tab = ({active,onClick,children}) => (
+  <button onClick={onClick} style={{ padding:"7px 16px",border:"1px solid "+(active?C.accent:C.border),borderRadius:8,
+    background:active?C.accent+"18":"transparent",color:active?C.accent:C.dim,
+    cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'JetBrains Mono',monospace",transition:"all .2s" }}>{children}</button>
+);
+
+const CTip = ({active,payload,label}) => {
+  if(!active||!payload?.length) return null;
+  return (
+    <div style={{background:"#1e293bee",border:"1px solid "+C.borderL,borderRadius:8,padding:"10px 14px",backdropFilter:"blur(8px)"}}>
+      <div style={{fontSize:10,color:C.muted,marginBottom:6,fontFamily:"'JetBrains Mono',monospace"}}>Month {label}</div>
+      {payload.map((p,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:p.color}} />
+          <span style={{fontSize:11,color:C.dim,minWidth:65}}>{p.name}</span>
+          <span style={{fontSize:11,color:C.text,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+function App() {
+  const [tab,setTab] = useState("growth");
+  const [params,setParams] = useState({
+    years:5, capital:1000000, marginUsage:0, marginRate:0.08, taxRate:0.285,
+    sofiRatio:1, googlRatio:0, sofiTarget:60, googlTarget:500,
+    coverRatio:1, reservePct:0, premOffset:0.7, sofiVolAdj:0.3, stagnantThresh:3,
+    reStartVal:700000, tradingStartVal:300000, reReturn:0.04, reRental:0.04 });
+  const [mcRuns,setMcRuns]=useState(25);
+  const [simKey,setSimKey]=useState(0);
+  const set=k=>v=>setParams(p=>({...p,[k]:v}));
+
+  const single = useMemo(()=>runSim(params),[params,simKey]);
+  const mc = useMemo(()=>runMC(params,mcRuns),[params,mcRuns,simKey]);
+  const last = single[single.length-1];
+  const prems = single.filter(d=>d.month>0).map(d=>({month:d.month,sofi:d.premSofi,googl:d.premGoogl,total:d.premSofi+d.premGoogl}));
+  const totalPrem = prems.reduce((s,d)=>s+d.total,0);
+  const assigns = single.filter(d=>d.assignment&&d.assignment!=="-");
+
+  return (
+    <div style={{padding:"20px 16px",maxWidth:1260,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:4}}>
+        <h1 style={{fontSize:26,fontWeight:800,background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Wheel Strategy Simulator</h1>
+        <span style={{fontSize:11,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>v2.0</span>
+      </div>
+      <p style={{color:C.dim,fontSize:13,marginBottom:20}}>SoFi CC + CSP · Monte Carlo · 4-Strategy Comparison</p>
+
+      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+        {/* Params Panel */}
+        <div style={{width:240,flexShrink:0,background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"16px 18px"}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+            <span style={{width:6,height:6,borderRadius:"50%",background:C.accent,display:"inline-block"}} /> Parameters
+          </div>
+          <Slider label="Years" value={params.years} onChange={set("years")} min={1} max={10} step={1} />
+          <Slider label="Capital" value={params.capital} onChange={set("capital")} min={100000} max={5000000} step={100000} format={fmt} />
+          <Slider label="SoFi Target" value={params.sofiTarget} onChange={set("sofiTarget")} min={20} max={120} step={5} format={v=>"$"+v} />
+          <Slider label="Tax Rate" value={params.taxRate} onChange={set("taxRate")} min={0} max={0.5} step={0.01} format={pct} />
+          <Slider label="Prem Offset" value={params.premOffset} onChange={set("premOffset")} min={0.3} max={1} step={0.05} format={v=>v.toFixed(2)} />
+          <Slider label="Vol Adjust" value={params.sofiVolAdj} onChange={set("sofiVolAdj")} min={0} max={1} step={0.05} format={v=>"+"+pct(v)} />
+          <Slider label="Cover Ratio" value={params.coverRatio} onChange={set("coverRatio")} min={0.25} max={1} step={0.25} format={pct} />
+          <Slider label="Reserve %" value={params.reservePct} onChange={set("reservePct")} min={0} max={0.5} step={0.05} format={pct} />
+          <Slider label="RE Start" value={params.reStartVal} onChange={set("reStartVal")} min={0} max={2000000} step={50000} format={fmt} />
+          <Slider label="MC Runs" value={mcRuns} onChange={setMcRuns} min={5} max={100} step={5} />
+          <button onClick={()=>setSimKey(k=>k+1)} style={{
+            width:"100%",padding:"9px 0",marginTop:10,border:"1px solid "+C.accent,borderRadius:8,
+            background:C.accent+"15",color:C.accent,cursor:"pointer",fontSize:12,fontWeight:700,
+            fontFamily:"'JetBrains Mono',monospace" }}>↻ Re-Roll</button>
+        </div>
+
+        {/* Main */}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+            <MetricCard label="Wheel (After Tax)" value={fmt(last.wheel)} sub={"CAGR "+pct(cagr(last.wheel,params.capital,params.years))} color={C.wheel} />
+            <MetricCard label="Tax-Free" value={fmt(last.taxFree)} sub={"CAGR "+pct(cagr(last.taxFree,params.capital,params.years))} color={C.tf} />
+            <MetricCard label="RE + Dividend" value={fmt(last.reDiv)} sub={"CAGR "+pct(cagr(last.reDiv,params.capital,params.years))} color={C.re} />
+            <MetricCard label="Buy & Hold" value={fmt(last.buyHold)} sub={"CAGR "+pct(cagr(last.buyHold,params.capital,params.years))} color={C.bh} />
+          </div>
+
+          <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+            {[["growth","Growth"],["price","Price"],["premium","Premiums"],["mc","Monte Carlo"],["ledger","Ledger"]].map(([k,l])=>(
+              <Tab key={k} active={tab===k} onClick={()=>setTab(k)}>{l}</Tab>
+            ))}
+          </div>
+
+          <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"18px 14px"}}>
+            {tab==="growth" && (
+              <div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Portfolio Value Over Time</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Single run · 4 strategies</div>
+                <ResponsiveContainer width="100%" height={360}>
+                  <ComposedChart data={single}>
+                    <defs><linearGradient id="gW" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.wheel} stopOpacity={0.15}/><stop offset="100%" stopColor={C.wheel} stopOpacity={0}/></linearGradient></defs>
+                    <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
+                    <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
+                    <Tooltip content={<CTip/>} />
+                    <Area type="monotone" dataKey="wheel" fill="url(#gW)" stroke="none" />
+                    <Line type="monotone" dataKey="wheel" stroke={C.wheel} strokeWidth={2.5} dot={false} name="Wheel" />
+                    <Line type="monotone" dataKey="taxFree" stroke={C.tf} strokeWidth={2} dot={false} name="Tax-Free" strokeDasharray="6 3" />
+                    <Line type="monotone" dataKey="reDiv" stroke={C.re} strokeWidth={2} dot={false} name="RE+Div" />
+                    <Line type="monotone" dataKey="buyHold" stroke={C.bh} strokeWidth={2} dot={false} name="B&H" strokeDasharray="3 3" />
+                    <ReferenceLine y={params.capital} stroke={C.muted} strokeDasharray="3 3" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {tab==="price" && (
+              <div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>SoFi Stock Price Path</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Assignments: {assigns.length} events · Target: ${params.sofiTarget}</div>
+                <ResponsiveContainer width="100%" height={360}>
+                  <ComposedChart data={single}>
+                    <defs><linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.green} stopOpacity={0.1}/><stop offset="100%" stopColor={C.green} stopOpacity={0}/></linearGradient></defs>
+                    <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
+                    <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>"$"+v} />
+                    <Tooltip content={<CTip/>} />
+                    <Area type="monotone" dataKey="sofiPx" fill="url(#gP)" stroke="none" />
+                    <Line type="monotone" dataKey="sofiPx" stroke={C.green} strokeWidth={2} dot={false} name="SoFi Price" />
+                    <ReferenceLine y={params.sofiTarget} stroke={C.accent} strokeDasharray="6 3" />
+                    <ReferenceLine y={18.90} stroke={C.muted} strokeDasharray="3 3" />
+                    {assigns.map((a,i)=><ReferenceLine key={i} x={a.month} stroke={a.assignment.includes("Put")?C.red:C.bh} strokeDasharray="2 2" strokeOpacity={0.4} />)}
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div style={{display:"flex",gap:14,marginTop:6}}>
+                  <span style={{fontSize:10,color:C.red}}>▎ Put Assignment</span>
+                  <span style={{fontSize:10,color:C.bh}}>▎ Call Assignment</span>
+                </div>
+              </div>
+            )}
+
+            {tab==="premium" && (
+              <div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monthly Premium Income</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Total: {fmt(totalPrem)} (pre-tax)</div>
+                <ResponsiveContainer width="100%" height={360}>
+                  <BarChart data={prems}>
+                    <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
+                    <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
+                    <Tooltip content={<CTip/>} />
+                    <Bar dataKey="sofi" stackId="a" fill={C.wheel} name="SoFi" />
+                    <Bar dataKey="googl" stackId="a" fill={C.tf} radius={[2,2,0,0]} name="GOOGL" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {tab==="mc" && (
+              <div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monte Carlo: {mcRuns} Runs</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Avg Wheel CAGR: {pct(mc.avg.wheelCAGR)} · Avg B&H: {pct(mc.avg.bhCAGR)}</div>
+                <ResponsiveContainer width="100%" height={340}>
+                  <BarChart data={mc.results} barGap={2}>
+                    <XAxis dataKey="run" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
+                    <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
+                    <Tooltip content={<CTip/>} />
+                    <Bar dataKey="wheel" fill={C.wheel} radius={[3,3,0,0]} name="Wheel" fillOpacity={0.7} />
+                    <Bar dataKey="buyHold" fill={C.bh} radius={[3,3,0,0]} name="B&H" fillOpacity={0.5} />
+                    <ReferenceLine y={mc.avg.wheel} stroke={C.wheel} strokeDasharray="6 3" />
+                    <ReferenceLine y={mc.avg.buyHold} stroke={C.bh} strokeDasharray="6 3" />
+                  </BarChart>
+                </ResponsiveContainer>
+                <div style={{marginTop:16,overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'JetBrains Mono',monospace"}}>
+                    <thead><tr style={{borderBottom:"1px solid "+C.borderL}}>
+                      {["Strategy","Avg Final","Avg CAGR","Best","Worst"].map(h=>(
+                        <th key={h} style={{padding:"7px 10px",textAlign:"left",color:C.muted,fontWeight:600,fontSize:9,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {[{n:"Wheel",c:C.wheel,k:"wheel",ck:"wheelCAGR"},{n:"Tax-Free",c:C.tf,k:"taxFree",ck:"tfCAGR"},{n:"RE+Div",c:C.re,k:"reDiv",ck:"reCAGR"},{n:"B&H",c:C.bh,k:"buyHold",ck:"bhCAGR"}].map(s=>{
+                        const vals=mc.results.map(r=>r[s.k]);
+                        return(<tr key={s.n} style={{borderBottom:"1px solid "+C.border}}>
+                          <td style={{padding:"7px 10px",display:"flex",alignItems:"center",gap:6}}>
+                            <div style={{width:8,height:8,borderRadius:2,background:s.c}}/><span style={{color:s.c,fontWeight:600}}>{s.n}</span></td>
+                          <td style={{padding:"7px 10px",color:C.text}}>{fmt(mc.avg[s.k])}</td>
+                          <td style={{padding:"7px 10px",color:mc.avg[s.ck]>0?C.green:C.red}}>{pct(mc.avg[s.ck])}</td>
+                          <td style={{padding:"7px 10px",color:C.green}}>{fmt(Math.max(...vals))}</td>
+                          <td style={{padding:"7px 10px",color:C.red}}>{fmt(Math.min(...vals))}</td>
+                        </tr>);
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {tab==="ledger" && (
+              <div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monthly Ledger (Run #1)</div>
+                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Scroll to explore</div>
+                <div style={{overflowX:"auto",maxHeight:460,overflowY:"auto"}}>
+                  <table style={{borderCollapse:"collapse",fontSize:10,fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap",width:"100%"}}>
+                    <thead style={{position:"sticky",top:0,zIndex:1}}>
+                      <tr style={{background:C.cardH}}>
+                        {["Mo","SoFi $","Shares","CC","CSP","Cash","Wheel","TaxFree","RE+Div","B&H","Event"].map(h=>(
+                          <th key={h} style={{padding:"7px 8px",textAlign:"right",color:C.muted,fontWeight:600,fontSize:9,textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid "+C.borderL}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {single.map((r,i)=>(
+                        <tr key={i} style={{borderBottom:"1px solid "+C.border,background:i%2?"transparent":C.bg+"60"}}>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.dim}}>{r.month}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.green}}>${r.sofiPx.toFixed(2)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.text}}>{r.sofiSh.toLocaleString()}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.accent}}>{r.sCQ}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.re}}>{r.sPQ}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.dim}}>{fmt(r.cash)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.wheel,fontWeight:600}}>{fmt(r.wheel)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.tf}}>{fmt(r.taxFree)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.re}}>{fmt(r.reDiv)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:C.bh}}>{fmt(r.buyHold)}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:r.assignment.includes("Put")?C.red:r.assignment.includes("Call")?C.bh:C.muted,fontSize:9}}>{r.assignment||"-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{textAlign:"center",marginTop:24,fontSize:10,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>
+        Wheel Strategy Simulator · For educational purposes only · Not financial advice
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
