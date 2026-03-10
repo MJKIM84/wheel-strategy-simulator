@@ -231,9 +231,9 @@ const CTip = ({active,payload,label,C:colors}) => {
 };
 
 function App() {
-  const [dark,setDark]=useState(true);
+  const [dark,setDark]=useState(()=>{const s=localStorage.getItem("theme");return s?s==="dark":true;});
   const C=dark?C_DARK:C_LIGHT;
-  useEffect(()=>{document.body.className=dark?"":"light";},[dark]);
+  useEffect(()=>{document.body.className=dark?"":"light";localStorage.setItem("theme",dark?"dark":"light");},[dark]);
 
   const [tab,setTab] = useState("growth");
   const [stockKey,setStockKey] = useState("SOFI");
@@ -305,7 +305,7 @@ function App() {
     <div style={{padding:"20px 16px",maxWidth:1260,margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
         <div style={{display:"flex",alignItems:"baseline",gap:10}}>
-          <h1 style={{fontSize:26,fontWeight:800,background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Wheel Strategy Simulator</h1>
+          <h1 style={{fontSize:26,fontWeight:800,...(dark?{background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}:{color:"#0f172a"})}}>Wheel Strategy Simulator</h1>
           <span style={{fontSize:11,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>v3.0</span>
         </div>
         <div style={{display:"flex",gap:6}}>
