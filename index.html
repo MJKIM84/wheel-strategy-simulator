@@ -12,21 +12,32 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:#0a0e17; color:#e2e8f0; font-family:'Satoshi','Inter',system-ui,sans-serif; }
-  input[type=range] { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:#1e293b; outline:none; cursor:pointer; width:100%; }
-  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:#22d3ee; cursor:pointer; }
-  input[type=range]::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#22d3ee; border:none; cursor:pointer; }
+  :root { --bg:#0a0e17; --card:#111827; --cardH:#1a2235; --border:#1e293b; --borderL:#334155;
+    --text:#e2e8f0; --dim:#94a3b8; --muted:#64748b; --accent:#22d3ee; }
+  body { background:var(--bg); color:var(--text); font-family:'Satoshi','Inter',system-ui,sans-serif; transition:background .3s,color .3s; }
+  body.light { --bg:#f8fafc; --card:#ffffff; --cardH:#f1f5f9; --border:#e2e8f0; --borderL:#cbd5e1;
+    --text:#1e293b; --dim:#64748b; --muted:#94a3b8; --accent:#0891b2; }
+  input[type=range] { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:var(--border); outline:none; cursor:pointer; width:100%; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; }
+  input[type=range]::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:var(--accent); border:none; cursor:pointer; }
   ::-webkit-scrollbar { width:6px; height:6px; }
-  ::-webkit-scrollbar-track { background:#111827; }
-  ::-webkit-scrollbar-thumb { background:#334155; border-radius:3px; }
-  ::-webkit-scrollbar-thumb:hover { background:#475569; }
+  ::-webkit-scrollbar-track { background:var(--card); }
+  ::-webkit-scrollbar-thumb { background:var(--borderL); border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--muted); }
+  select { background:var(--bg); color:var(--accent); border:1px solid var(--border); }
+  @media(max-width:768px){
+    .main-layout{flex-direction:column!important;}
+    .params-panel{width:100%!important;order:2;}
+    .main-content{order:1;}
+    .metric-row{flex-direction:column!important;}
+  }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo } = React;
-const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Area, ComposedChart } = Recharts;
+const { useState, useMemo, useEffect, useCallback } = React;
+const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Area, ComposedChart, Legend } = Recharts;
 
 const STOCKS = {
   SOFI: { name:"SoFi", ticker:"SOFI", price:18.90, target:60, baseline:27.24,
@@ -71,7 +82,7 @@ const fmt = (v) => {
   return s+"$"+abs.toFixed(0);
 };
 const pct = (v) => (v*100).toFixed(1)+"%";
-const cagr = (f, i, y) => Math.pow(f/i, 1/y) - 1;
+const cagr = (f, i, y) => y>0 ? Math.pow(f/i, 1/y) - 1 : 0;
 
 function runSim(p) {
   const stk = p.stock, months = p.years * 12, SPLIT = 0.5;
@@ -127,28 +138,60 @@ function runMC(p, runs=25){
   const results=[];
   for(let i=0;i<runs;i++){
     const h=runSim(p); const last=h[h.length-1];
+    const monthlyReturns=h.slice(1).map((d,j)=>d.wheel/h[j].wheel-1);
+    const avgRet=monthlyReturns.reduce((s,r)=>s+r,0)/monthlyReturns.length;
+    const stdRet=Math.sqrt(monthlyReturns.reduce((s,r)=>s+Math.pow(r-avgRet,2),0)/monthlyReturns.length);
+    const sharpe=stdRet>0?(avgRet/stdRet)*Math.sqrt(12):0;
+    let peak=p.capital, maxDD=0;
+    h.forEach(d=>{if(d.wheel>peak)peak=d.wheel; const dd=(peak-d.wheel)/peak; if(dd>maxDD)maxDD=dd;});
     results.push({ run:i+1, wheel:last.wheel, taxFree:last.taxFree, reDiv:last.reDiv, buyHold:last.buyHold,
       wheelCAGR:cagr(last.wheel,p.capital,p.years), tfCAGR:cagr(last.taxFree,p.capital,p.years),
-      reCAGR:cagr(last.reDiv,p.capital,p.years), bhCAGR:cagr(last.buyHold,p.capital,p.years) });
+      reCAGR:cagr(last.reDiv,p.capital,p.years), bhCAGR:cagr(last.buyHold,p.capital,p.years),
+      sharpe, maxDD });
   }
   const avg=(arr,k)=>arr.reduce((s,x)=>s+x[k],0)/arr.length;
-  return { results, avg:{ wheel:avg(results,'wheel'), taxFree:avg(results,'taxFree'), reDiv:avg(results,'reDiv'), buyHold:avg(results,'buyHold'),
-    wheelCAGR:avg(results,'wheelCAGR'), tfCAGR:avg(results,'tfCAGR'), reCAGR:avg(results,'reCAGR'), bhCAGR:avg(results,'bhCAGR') }};
+  const winRate=results.filter(r=>r.wheel>r.buyHold).length/results.length;
+  return { results, winRate, avg:{ wheel:avg(results,'wheel'), taxFree:avg(results,'taxFree'), reDiv:avg(results,'reDiv'), buyHold:avg(results,'buyHold'),
+    wheelCAGR:avg(results,'wheelCAGR'), tfCAGR:avg(results,'tfCAGR'), reCAGR:avg(results,'reCAGR'), bhCAGR:avg(results,'bhCAGR'),
+    sharpe:avg(results,'sharpe'), maxDD:avg(results,'maxDD') }};
 }
 
-const C = { bg:"#0a0e17", card:"#111827", cardH:"#1a2235", border:"#1e293b", borderL:"#334155",
+function downloadCSV(data, filename) {
+  if(!data.length) return;
+  const keys=Object.keys(data[0]);
+  const csv=[keys.join(","), ...data.map(r=>keys.map(k=>{const v=r[k];return typeof v==='string'&&v.includes(',')?'"'+v+'"':v;}).join(","))].join("\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function encodeParams(stockKey, params, mcRuns) {
+  const p={s:stockKey,y:params.years,c:params.capital,t:params.target,tr:params.taxRate,
+    po:params.premOffset,va:params.volAdj,cr:params.coverRatio,rp:params.reservePct,
+    rs:params.reStartVal,mr:mcRuns};
+  return btoa(JSON.stringify(p));
+}
+function decodeParams(hash) {
+  try{const p=JSON.parse(atob(hash));return p;}catch(e){return null;}
+}
+
+const C_DARK = { bg:"#0a0e17", card:"#111827", cardH:"#1a2235", border:"#1e293b", borderL:"#334155",
   text:"#e2e8f0", dim:"#94a3b8", muted:"#64748b",
   wheel:"#22d3ee", tf:"#a78bfa", re:"#f472b6", bh:"#fbbf24", green:"#34d399", red:"#f87171", accent:"#22d3ee" };
+const C_LIGHT = { bg:"#f8fafc", card:"#ffffff", cardH:"#f1f5f9", border:"#e2e8f0", borderL:"#cbd5e1",
+  text:"#1e293b", dim:"#64748b", muted:"#94a3b8",
+  wheel:"#0891b2", tf:"#7c3aed", re:"#db2777", bh:"#d97706", green:"#059669", red:"#dc2626", accent:"#0891b2" };
 
-const MetricCard = ({label,value,sub,color}) => (
-  <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:12,padding:"14px 18px",flex:1,minWidth:150}}>
+const MetricCard = ({label,value,sub,color,C}) => (
+  <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:12,padding:"14px 18px",flex:1,minWidth:140}}>
     <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:5,fontFamily:"'JetBrains Mono',monospace"}}>{label}</div>
     <div style={{fontSize:22,fontWeight:700,color:color||C.text,fontFamily:"'JetBrains Mono',monospace"}}>{value}</div>
     {sub && <div style={{fontSize:11,color:C.dim,marginTop:3}}>{sub}</div>}
   </div>
 );
 
-const Slider = ({label,value,onChange,min,max,step,format}) => (
+const Slider = ({label,value,onChange,min,max,step,format,C}) => (
   <div style={{marginBottom:10}}>
     <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
       <span style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1}}>{label}</span>
@@ -158,22 +201,29 @@ const Slider = ({label,value,onChange,min,max,step,format}) => (
   </div>
 );
 
-const Tab = ({active,onClick,children}) => (
+const Tab = ({active,onClick,children,C}) => (
   <button onClick={onClick} style={{ padding:"7px 16px",border:"1px solid "+(active?C.accent:C.border),borderRadius:8,
     background:active?C.accent+"18":"transparent",color:active?C.accent:C.dim,
     cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'JetBrains Mono',monospace",transition:"all .2s" }}>{children}</button>
 );
 
-const CTip = ({active,payload,label}) => {
+const SmallBtn = ({onClick,children,C,style:s}) => (
+  <button onClick={onClick} style={{padding:"5px 12px",border:"1px solid "+C.border,borderRadius:6,
+    background:"transparent",color:C.dim,cursor:"pointer",fontSize:10,fontWeight:600,
+    fontFamily:"'JetBrains Mono',monospace",transition:"all .2s",...s}}>{children}</button>
+);
+
+const CTip = ({active,payload,label,C:colors}) => {
+  const cc=colors||C_DARK;
   if(!active||!payload?.length) return null;
   return (
-    <div style={{background:"#1e293bee",border:"1px solid "+C.borderL,borderRadius:8,padding:"10px 14px",backdropFilter:"blur(8px)"}}>
-      <div style={{fontSize:10,color:C.muted,marginBottom:6,fontFamily:"'JetBrains Mono',monospace"}}>Month {label}</div>
+    <div style={{background:cc.card+"ee",border:"1px solid "+cc.borderL,borderRadius:8,padding:"10px 14px",backdropFilter:"blur(8px)"}}>
+      <div style={{fontSize:10,color:cc.muted,marginBottom:6,fontFamily:"'JetBrains Mono',monospace"}}>Month {label}</div>
       {payload.map((p,i)=>(
         <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:p.color}} />
-          <span style={{fontSize:11,color:C.dim,minWidth:65}}>{p.name}</span>
-          <span style={{fontSize:11,color:C.text,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(p.value)}</span>
+          <span style={{fontSize:11,color:cc.dim,minWidth:65}}>{p.name}</span>
+          <span style={{fontSize:11,color:cc.text,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(p.value)}</span>
         </div>
       ))}
     </div>
@@ -181,91 +231,161 @@ const CTip = ({active,payload,label}) => {
 };
 
 function App() {
+  const [dark,setDark]=useState(true);
+  const C=dark?C_DARK:C_LIGHT;
+  useEffect(()=>{document.body.className=dark?"":"light";},[dark]);
+
   const [tab,setTab] = useState("growth");
   const [stockKey,setStockKey] = useState("SOFI");
+  const [stock2Key,setStock2Key] = useState("NONE");
+  const [splitRatio,setSplitRatio] = useState(0.7);
   const stk = STOCKS[stockKey];
+  const stk2 = stock2Key!=="NONE"?STOCKS[stock2Key]:null;
   const [params,setParams] = useState({
     years:5, capital:1000000, marginUsage:0, marginRate:0.08, taxRate:0.285,
     target:60, coverRatio:1, reservePct:0, premOffset:0.7, volAdj:0.3, stagnantThresh:3,
     reStartVal:700000, tradingStartVal:300000, reReturn:0.04, reRental:0.04 });
+  const [target2,setTarget2]=useState(500);
   const [mcRuns,setMcRuns]=useState(25);
   const [simKey,setSimKey]=useState(0);
+  const [panelOpen,setPanelOpen]=useState(true);
   const set=k=>v=>setParams(p=>({...p,[k]:v}));
-  const simParams = useMemo(()=>({...params, stock:stk}),[params,stk]);
-  const changeStock=(key)=>{setStockKey(key);setParams(p=>({...p,target:STOCKS[key].target}));};
 
-  const single = useMemo(()=>runSim(simParams),[simParams,simKey]);
-  const mc = useMemo(()=>runMC(simParams,mcRuns),[simParams,mcRuns,simKey]);
-  const last = single[single.length-1];
+  useEffect(()=>{
+    const hash=window.location.hash.slice(1);
+    if(hash){const d=decodeParams(hash);if(d){
+      setStockKey(d.s||"SOFI");
+      setParams(p=>({...p,years:d.y||5,capital:d.c||1000000,target:d.t||60,taxRate:d.tr||0.285,
+        premOffset:d.po||0.7,volAdj:d.va||0.3,coverRatio:d.cr||1,reservePct:d.rp||0,reStartVal:d.rs||700000}));
+      setMcRuns(d.mr||25);
+    }}
+  },[]);
+
+  const simParams = useMemo(()=>({...params, stock:stk}),[params,stk]);
+  const simParams2 = useMemo(()=>stk2?({...params, stock:stk2, target:target2, capital:params.capital*(1-splitRatio)}):null,[params,stk2,target2,splitRatio]);
+  const changeStock=(key)=>{setStockKey(key);setParams(p=>({...p,target:STOCKS[key].target}));};
+  const changeStock2=(key)=>{setStock2Key(key);if(key!=="NONE")setTarget2(STOCKS[key].target);};
+
+  const mainParams = useMemo(()=>stk2?{...simParams,capital:params.capital*splitRatio}:simParams,[simParams,stk2,splitRatio]);
+  const single = useMemo(()=>runSim(mainParams),[mainParams,simKey]);
+  const single2 = useMemo(()=>simParams2?runSim(simParams2):null,[simParams2,simKey]);
+  const mc = useMemo(()=>runMC(mainParams,mcRuns),[mainParams,mcRuns,simKey]);
+
+  const combined = useMemo(()=>{
+    if(!single2) return single;
+    return single.map((d,i)=>{const d2=single2[i];return{...d,
+      wheel:d.wheel+d2.wheel, taxFree:d.taxFree+d2.taxFree,
+      buyHold:d.buyHold+d2.buyHold, stock2Px:d2.stockPx};});
+  },[single,single2]);
+
+  const last = combined[combined.length-1];
   const prems = single.filter(d=>d.month>0).map(d=>({month:d.month,prem:d.prem}));
   const totalPrem = prems.reduce((s,d)=>s+d.prem,0);
   const assigns = single.filter(d=>d.assignment&&d.assignment!=="-");
 
+  const shareLink=useCallback(()=>{
+    const hash=encodeParams(stockKey,params,mcRuns);
+    const url=window.location.origin+window.location.pathname+"#"+hash;
+    navigator.clipboard.writeText(url);
+    alert("Link copied!");
+  },[stockKey,params,mcRuns]);
+
+  const exportLedgerCSV=()=>{
+    downloadCSV(single.map(r=>({Month:r.month,Price:r.stockPx,Shares:r.sh,CC:r.cQ,CSP:r.pQ,Cash:Math.round(r.cash),
+      Wheel:Math.round(r.wheel),TaxFree:Math.round(r.taxFree),"RE+Div":Math.round(r.reDiv),"B&H":Math.round(r.buyHold),Event:r.assignment})),
+      stk.ticker+"_ledger.csv");
+  };
+  const exportMcCSV=()=>{
+    downloadCSV(mc.results.map(r=>({Run:r.run,Wheel:Math.round(r.wheel),TaxFree:Math.round(r.taxFree),"RE+Div":Math.round(r.reDiv),"B&H":Math.round(r.buyHold),
+      WheelCAGR:pct(r.wheelCAGR),Sharpe:r.sharpe.toFixed(2),MaxDD:pct(r.maxDD)})),
+      stk.ticker+"_mc_"+mcRuns+"runs.csv");
+  };
+
   return (
     <div style={{padding:"20px 16px",maxWidth:1260,margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:4}}>
-        <h1 style={{fontSize:26,fontWeight:800,background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Wheel Strategy Simulator</h1>
-        <span style={{fontSize:11,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>v2.0</span>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:10}}>
+          <h1 style={{fontSize:26,fontWeight:800,background:"linear-gradient(135deg,"+C.accent+","+C.tf+")",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Wheel Strategy Simulator</h1>
+          <span style={{fontSize:11,color:C.muted,fontFamily:"'JetBrains Mono',monospace"}}>v3.0</span>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <SmallBtn C={C} onClick={shareLink}>Share Link</SmallBtn>
+          <SmallBtn C={C} onClick={()=>setDark(!dark)}>{dark?"Light":"Dark"}</SmallBtn>
+          <button onClick={()=>setPanelOpen(!panelOpen)} className="mobile-toggle" style={{
+            display:"none",padding:"5px 12px",border:"1px solid "+C.border,borderRadius:6,
+            background:"transparent",color:C.dim,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"}}>
+            {panelOpen?"Hide":"Params"}</button>
+        </div>
       </div>
-      <p style={{color:C.dim,fontSize:13,marginBottom:20}}>{stk.ticker} CC + CSP · Monte Carlo · 4-Strategy Comparison</p>
+      <p style={{color:C.dim,fontSize:13,marginBottom:20}}>{stk.ticker}{stk2?" + "+stk2.ticker:""} CC + CSP · Monte Carlo · 4-Strategy Comparison</p>
 
-      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+      <div className="main-layout" style={{display:"flex",gap:16,flexWrap:"wrap"}}>
         {/* Params Panel */}
-        <div style={{width:240,flexShrink:0,background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"16px 18px"}}>
+        <div className="params-panel" style={{width:240,flexShrink:0,background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"16px 18px",display:panelOpen?"block":"none"}}>
           <div style={{fontSize:12,fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
             <span style={{width:6,height:6,borderRadius:"50%",background:C.accent,display:"inline-block"}} /> Parameters
           </div>
           <div style={{marginBottom:12}}>
-            <div style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Stock</div>
+            <div style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Stock 1</div>
             <select value={stockKey} onChange={e=>changeStock(e.target.value)} style={{
-              width:"100%",padding:"7px 10px",background:C.bg,color:C.accent,border:"1px solid "+C.border,
-              borderRadius:6,fontSize:12,fontFamily:"'JetBrains Mono',monospace",fontWeight:600,cursor:"pointer",outline:"none"
+              width:"100%",padding:"7px 10px",borderRadius:6,fontSize:12,fontFamily:"'JetBrains Mono',monospace",fontWeight:600,cursor:"pointer",outline:"none"
             }}>
               {Object.entries(STOCKS).map(([k,v])=><option key={k} value={k} style={{background:C.bg}}>{v.ticker} — ${v.price}</option>)}
             </select>
           </div>
-          <Slider label="Years" value={params.years} onChange={set("years")} min={1} max={10} step={1} />
-          <Slider label="Capital" value={params.capital} onChange={set("capital")} min={100000} max={5000000} step={100000} format={fmt} />
-          <Slider label={stk.ticker+" Target"} value={params.target} onChange={set("target")} min={Math.round(stk.price*0.8)} max={Math.round(stk.price*5)} step={stk.price>100?10:5} format={v=>"$"+v} />
-          <Slider label="Tax Rate" value={params.taxRate} onChange={set("taxRate")} min={0} max={0.5} step={0.01} format={pct} />
-          <Slider label="Prem Offset" value={params.premOffset} onChange={set("premOffset")} min={0.3} max={1} step={0.05} format={v=>v.toFixed(2)} />
-          <Slider label="Vol Adjust" value={params.volAdj} onChange={set("volAdj")} min={0} max={1} step={0.05} format={v=>"+"+pct(v)} />
-          <Slider label="Cover Ratio" value={params.coverRatio} onChange={set("coverRatio")} min={0.25} max={1} step={0.25} format={pct} />
-          <Slider label="Reserve %" value={params.reservePct} onChange={set("reservePct")} min={0} max={0.5} step={0.05} format={pct} />
-          <Slider label="RE Start" value={params.reStartVal} onChange={set("reStartVal")} min={0} max={2000000} step={50000} format={fmt} />
-          <Slider label="MC Runs" value={mcRuns} onChange={setMcRuns} min={5} max={100} step={5} />
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Stock 2 (Dual)</div>
+            <select value={stock2Key} onChange={e=>changeStock2(e.target.value)} style={{
+              width:"100%",padding:"7px 10px",borderRadius:6,fontSize:12,fontFamily:"'JetBrains Mono',monospace",fontWeight:600,cursor:"pointer",outline:"none"
+            }}>
+              <option value="NONE" style={{background:C.bg}}>— None —</option>
+              {Object.entries(STOCKS).filter(([k])=>k!==stockKey).map(([k,v])=><option key={k} value={k} style={{background:C.bg}}>{v.ticker} — ${v.price}</option>)}
+            </select>
+          </div>
+          {stk2 && <Slider C={C} label="Split (S1)" value={splitRatio} onChange={setSplitRatio} min={0.1} max={0.9} step={0.1} format={v=>Math.round(v*100)+"/"+Math.round((1-v)*100)} />}
+          <Slider C={C} label="Years" value={params.years} onChange={set("years")} min={1} max={10} step={1} />
+          <Slider C={C} label="Capital" value={params.capital} onChange={set("capital")} min={100000} max={5000000} step={100000} format={fmt} />
+          <Slider C={C} label={stk.ticker+" Target"} value={params.target} onChange={set("target")} min={Math.round(stk.price*0.8)} max={Math.round(stk.price*5)} step={stk.price>100?10:5} format={v=>"$"+v} />
+          {stk2 && <Slider C={C} label={stk2.ticker+" Target"} value={target2} onChange={setTarget2} min={Math.round(stk2.price*0.8)} max={Math.round(stk2.price*5)} step={stk2.price>100?10:5} format={v=>"$"+v} />}
+          <Slider C={C} label="Tax Rate" value={params.taxRate} onChange={set("taxRate")} min={0} max={0.5} step={0.01} format={pct} />
+          <Slider C={C} label="Prem Offset" value={params.premOffset} onChange={set("premOffset")} min={0.3} max={1} step={0.05} format={v=>v.toFixed(2)} />
+          <Slider C={C} label="Vol Adjust" value={params.volAdj} onChange={set("volAdj")} min={0} max={1} step={0.05} format={v=>"+"+pct(v)} />
+          <Slider C={C} label="Cover Ratio" value={params.coverRatio} onChange={set("coverRatio")} min={0.25} max={1} step={0.25} format={pct} />
+          <Slider C={C} label="Reserve %" value={params.reservePct} onChange={set("reservePct")} min={0} max={0.5} step={0.05} format={pct} />
+          <Slider C={C} label="RE Start" value={params.reStartVal} onChange={set("reStartVal")} min={0} max={2000000} step={50000} format={fmt} />
+          <Slider C={C} label="MC Runs" value={mcRuns} onChange={setMcRuns} min={5} max={100} step={5} />
           <button onClick={()=>setSimKey(k=>k+1)} style={{
             width:"100%",padding:"9px 0",marginTop:10,border:"1px solid "+C.accent,borderRadius:8,
             background:C.accent+"15",color:C.accent,cursor:"pointer",fontSize:12,fontWeight:700,
-            fontFamily:"'JetBrains Mono',monospace" }}>↻ Re-Roll</button>
+            fontFamily:"'JetBrains Mono',monospace" }}>Re-Roll</button>
         </div>
 
         {/* Main */}
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
-            <MetricCard label="Wheel (After Tax)" value={fmt(last.wheel)} sub={"CAGR "+pct(cagr(last.wheel,params.capital,params.years))} color={C.wheel} />
-            <MetricCard label="Tax-Free" value={fmt(last.taxFree)} sub={"CAGR "+pct(cagr(last.taxFree,params.capital,params.years))} color={C.tf} />
-            <MetricCard label="RE + Dividend" value={fmt(last.reDiv)} sub={"CAGR "+pct(cagr(last.reDiv,params.capital,params.years))} color={C.re} />
-            <MetricCard label="Buy & Hold" value={fmt(last.buyHold)} sub={"CAGR "+pct(cagr(last.buyHold,params.capital,params.years))} color={C.bh} />
+        <div className="main-content" style={{flex:1,minWidth:0}}>
+          <div className="metric-row" style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+            <MetricCard C={C} label="Wheel (After Tax)" value={fmt(last.wheel)} sub={"CAGR "+pct(cagr(last.wheel,params.capital,params.years))} color={C.wheel} />
+            <MetricCard C={C} label="Tax-Free" value={fmt(last.taxFree)} sub={"CAGR "+pct(cagr(last.taxFree,params.capital,params.years))} color={C.tf} />
+            <MetricCard C={C} label="RE + Dividend" value={fmt(last.reDiv)} sub={"CAGR "+pct(cagr(last.reDiv,params.capital,params.years))} color={C.re} />
+            <MetricCard C={C} label="Buy & Hold" value={fmt(last.buyHold)} sub={"CAGR "+pct(cagr(last.buyHold,params.capital,params.years))} color={C.bh} />
           </div>
 
           <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
             {[["growth","Growth"],["price","Price"],["premium","Premiums"],["mc","Monte Carlo"],["ledger","Ledger"]].map(([k,l])=>(
-              <Tab key={k} active={tab===k} onClick={()=>setTab(k)}>{l}</Tab>
+              <Tab key={k} C={C} active={tab===k} onClick={()=>setTab(k)}>{l}</Tab>
             ))}
           </div>
 
           <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"18px 14px"}}>
             {tab==="growth" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Portfolio Value Over Time</div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2,color:C.text}}>Portfolio Value Over Time</div>
                 <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Single run · 4 strategies</div>
                 <ResponsiveContainer width="100%" height={360}>
-                  <ComposedChart data={single}>
+                  <ComposedChart data={combined}>
                     <defs><linearGradient id="gW" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.wheel} stopOpacity={0.15}/><stop offset="100%" stopColor={C.wheel} stopOpacity={0}/></linearGradient></defs>
                     <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
-                    <Tooltip content={<CTip/>} />
+                    <Tooltip content={<CTip C={C}/>} />
                     <Area type="monotone" dataKey="wheel" fill="url(#gW)" stroke="none" />
                     <Line type="monotone" dataKey="wheel" stroke={C.wheel} strokeWidth={2.5} dot={false} name="Wheel" />
                     <Line type="monotone" dataKey="taxFree" stroke={C.tf} strokeWidth={2} dot={false} name="Tax-Free" strokeDasharray="6 3" />
@@ -279,37 +399,42 @@ function App() {
 
             {tab==="price" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>{stk.ticker} Stock Price Path</div>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2,color:C.text}}>{stk.ticker} Stock Price Path</div>
                 <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Assignments: {assigns.length} events · Target: ${params.target}</div>
                 <ResponsiveContainer width="100%" height={360}>
-                  <ComposedChart data={single}>
+                  <ComposedChart data={combined}>
                     <defs><linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.green} stopOpacity={0.1}/><stop offset="100%" stopColor={C.green} stopOpacity={0}/></linearGradient></defs>
                     <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>"$"+v} />
-                    <Tooltip content={<CTip/>} />
+                    <Tooltip content={<CTip C={C}/>} />
                     <Area type="monotone" dataKey="stockPx" fill="url(#gP)" stroke="none" />
                     <Line type="monotone" dataKey="stockPx" stroke={C.green} strokeWidth={2} dot={false} name={stk.ticker+" Price"} />
+                    {stk2 && <Line type="monotone" dataKey="stock2Px" stroke={C.tf} strokeWidth={2} dot={false} name={stk2.ticker+" Price"} strokeDasharray="4 2" />}
                     <ReferenceLine y={params.target} stroke={C.accent} strokeDasharray="6 3" />
                     <ReferenceLine y={stk.price} stroke={C.muted} strokeDasharray="3 3" />
                     {assigns.map((a,i)=><ReferenceLine key={i} x={a.month} stroke={a.assignment.includes("Put")?C.red:C.bh} strokeDasharray="2 2" strokeOpacity={0.4} />)}
                   </ComposedChart>
                 </ResponsiveContainer>
                 <div style={{display:"flex",gap:14,marginTop:6}}>
-                  <span style={{fontSize:10,color:C.red}}>▎ Put Assignment</span>
-                  <span style={{fontSize:10,color:C.bh}}>▎ Call Assignment</span>
+                  <span style={{fontSize:10,color:C.red}}>| Put Assignment</span>
+                  <span style={{fontSize:10,color:C.bh}}>| Call Assignment</span>
                 </div>
               </div>
             )}
 
             {tab==="premium" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monthly Premium Income</div>
-                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Total: {fmt(totalPrem)} (pre-tax)</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700,marginBottom:2,color:C.text}}>Monthly Premium Income</div>
+                    <div style={{fontSize:11,color:C.dim}}>Total: {fmt(totalPrem)} (pre-tax)</div>
+                  </div>
+                </div>
                 <ResponsiveContainer width="100%" height={360}>
                   <BarChart data={prems}>
                     <XAxis dataKey="month" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
-                    <Tooltip content={<CTip/>} />
+                    <Tooltip content={<CTip C={C}/>} />
                     <Bar dataKey="prem" fill={C.wheel} radius={[2,2,0,0]} name={stk.ticker} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -318,19 +443,41 @@ function App() {
 
             {tab==="mc" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monte Carlo: {mcRuns} Runs</div>
-                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Avg Wheel CAGR: {pct(mc.avg.wheelCAGR)} · Avg B&H: {pct(mc.avg.bhCAGR)}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700,marginBottom:2,color:C.text}}>Monte Carlo: {mcRuns} Runs</div>
+                    <div style={{fontSize:11,color:C.dim}}>Avg Wheel CAGR: {pct(mc.avg.wheelCAGR)} · Avg B&H: {pct(mc.avg.bhCAGR)}</div>
+                  </div>
+                  <SmallBtn C={C} onClick={exportMcCSV}>Export CSV</SmallBtn>
+                </div>
                 <ResponsiveContainer width="100%" height={340}>
                   <BarChart data={mc.results} barGap={2}>
                     <XAxis dataKey="run" stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} />
                     <YAxis stroke={C.borderL} tick={{fill:C.muted,fontSize:10}} tickFormatter={fmt} />
-                    <Tooltip content={<CTip/>} />
+                    <Tooltip content={<CTip C={C}/>} />
                     <Bar dataKey="wheel" fill={C.wheel} radius={[3,3,0,0]} name="Wheel" fillOpacity={0.7} />
                     <Bar dataKey="buyHold" fill={C.bh} radius={[3,3,0,0]} name="B&H" fillOpacity={0.5} />
                     <ReferenceLine y={mc.avg.wheel} stroke={C.wheel} strokeDasharray="6 3" />
                     <ReferenceLine y={mc.avg.buyHold} stroke={C.bh} strokeDasharray="6 3" />
                   </BarChart>
                 </ResponsiveContainer>
+
+                {/* Risk Metrics */}
+                <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:100,background:C.bg,border:"1px solid "+C.border,borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Sharpe Ratio</div>
+                    <div style={{fontSize:18,fontWeight:700,color:mc.avg.sharpe>1?C.green:mc.avg.sharpe>0.5?C.bh:C.red,fontFamily:"'JetBrains Mono',monospace"}}>{mc.avg.sharpe.toFixed(2)}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:100,background:C.bg,border:"1px solid "+C.border,borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Max Drawdown</div>
+                    <div style={{fontSize:18,fontWeight:700,color:mc.avg.maxDD<0.2?C.green:mc.avg.maxDD<0.4?C.bh:C.red,fontFamily:"'JetBrains Mono',monospace"}}>{pct(mc.avg.maxDD)}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:100,background:C.bg,border:"1px solid "+C.border,borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Win vs B&H</div>
+                    <div style={{fontSize:18,fontWeight:700,color:mc.winRate>0.5?C.green:C.red,fontFamily:"'JetBrains Mono',monospace"}}>{pct(mc.winRate)}</div>
+                  </div>
+                </div>
+
                 <div style={{marginTop:16,overflowX:"auto"}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'JetBrains Mono',monospace"}}>
                     <thead><tr style={{borderBottom:"1px solid "+C.borderL}}>
@@ -358,8 +505,13 @@ function App() {
 
             {tab==="ledger" && (
               <div>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Monthly Ledger (Run #1)</div>
-                <div style={{fontSize:11,color:C.dim,marginBottom:14}}>Scroll to explore</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700,marginBottom:2,color:C.text}}>Monthly Ledger (Run #1)</div>
+                    <div style={{fontSize:11,color:C.dim}}>Scroll to explore</div>
+                  </div>
+                  <SmallBtn C={C} onClick={exportLedgerCSV}>Export CSV</SmallBtn>
+                </div>
                 <div style={{overflowX:"auto",maxHeight:460,overflowY:"auto"}}>
                   <table style={{borderCollapse:"collapse",fontSize:10,fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap",width:"100%"}}>
                     <thead style={{position:"sticky",top:0,zIndex:1}}>
